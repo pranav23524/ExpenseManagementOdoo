@@ -27,58 +27,127 @@ export interface Expense {
 
 interface ExpenseContextType {
   expenses: Expense[]
-  addExpense: (expense: Omit<Expense, "id" | "userId" | "userName" | "submittedAt" | "status">) => void
-  updateExpenseStatus: (id: string, status: ExpenseStatus, approvedBy?: string, rejectionReason?: string) => void
+  isLoading: boolean
+  addExpense: (expense: Omit<Expense, "id" | "userId" | "userName" | "submittedAt" | "status">) => Promise<void>
+  updateExpenseStatus: (id: string, status: ExpenseStatus, approvedBy?: string, rejectionReason?: string) => Promise<void>
   getUserExpenses: (userId: string) => Expense[]
   getPendingExpenses: () => Expense[]
+  fetchExpenses: () => Promise<void>
 }
 
 const ExpenseContext = createContext<ExpenseContextType | undefined>(undefined)
 
 export function ExpenseProvider({ children }: { children: ReactNode }) {
   const [expenses, setExpenses] = useState<Expense[]>([])
+  const [isLoading, setIsLoading] = useState(false)
   const { user } = useAuth()
 
-  useEffect(() => {
-    const storedExpenses = localStorage.getItem("expenses")
-    if (storedExpenses) {
-      setExpenses(JSON.parse(storedExpenses))
+  // Fetch expenses from API
+  const fetchExpenses = async () => {
+    if (!user) {
+      console.log('No user found, skipping expense fetch')
+      return
     }
-  }, [])
-
-  const saveExpenses = (newExpenses: Expense[]) => {
-    setExpenses(newExpenses)
-    localStorage.setItem("expenses", JSON.stringify(newExpenses))
+    
+    const token = localStorage.getItem('token')
+    if (!token) {
+      console.log('No token found, skipping expense fetch')
+      return
+    }
+    
+    setIsLoading(true)
+    try {
+      const response = await fetch('/api/expenses', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setExpenses(data.expenses || [])
+        console.log('Expenses fetched successfully:', data.expenses?.length || 0)
+      } else {
+        const errorData = await response.json()
+        console.error('Error fetching expenses:', errorData)
+        if (response.status === 401) {
+          console.log('Unauthorized - user may need to login again')
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching expenses:', error)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const addExpense = (expenseData: Omit<Expense, "id" | "userId" | "userName" | "submittedAt" | "status">) => {
+  useEffect(() => {
+    if (user) {
+      fetchExpenses()
+    }
+  }, [user])
+
+  const addExpense = async (expenseData: Omit<Expense, "id" | "userId" | "userName" | "submittedAt" | "status">) => {
     if (!user) return
 
-    const newExpense: Expense = {
-      ...expenseData,
-      id: `exp-${Date.now()}`,
-      userId: user.id,
-      userName: user.name,
-      status: "pending",
-      submittedAt: new Date().toISOString(),
-    }
+    setIsLoading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(expenseData)
+      })
 
-    saveExpenses([...expenses, newExpense])
+      if (response.ok) {
+        const data = await response.json()
+        setExpenses(prev => [data.expense, ...prev])
+        console.log('Expense added successfully:', data.expense.id)
+      } else {
+        const error = await response.json()
+        console.error('Error creating expense:', error)
+      }
+    } catch (error) {
+      console.error('Error creating expense:', error)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const updateExpenseStatus = (id: string, status: ExpenseStatus, approvedBy?: string, rejectionReason?: string) => {
-    const updatedExpenses = expenses.map((expense) =>
-      expense.id === id
-        ? {
-            ...expense,
-            status,
-            approvedBy,
-            approvedAt: status === "approved" ? new Date().toISOString() : undefined,
-            rejectionReason,
-          }
-        : expense,
-    )
-    saveExpenses(updatedExpenses)
+  const updateExpenseStatus = async (id: string, status: ExpenseStatus, approvedBy?: string, rejectionReason?: string) => {
+    setIsLoading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/expenses/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status, rejectionReason })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setExpenses(prev => 
+          prev.map(expense => 
+            expense.id === id ? data.expense : expense
+          )
+        )
+        console.log('Expense status updated successfully:', id, status)
+      } else {
+        const error = await response.json()
+        console.error('Error updating expense:', error)
+      }
+    } catch (error) {
+      console.error('Error updating expense:', error)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const getUserExpenses = (userId: string) => {
@@ -93,10 +162,12 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     <ExpenseContext.Provider
       value={{
         expenses,
+        isLoading,
         addExpense,
         updateExpenseStatus,
         getUserExpenses,
         getPendingExpenses,
+        fetchExpenses,
       }}
     >
       {children}

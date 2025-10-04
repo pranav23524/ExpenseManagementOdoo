@@ -36,7 +36,7 @@ interface AuthContextType {
   company: Company | null
   login: (email: string, password: string, role: UserRole) => Promise<void>
   logout: () => void
-  setupCompany: (companyData: Omit<Company, "id" | "createdAt">) => void
+  setupCompany: (companyData: Omit<Company, "id" | "createdAt">) => Promise<void>
   updateCompany: (companyData: Partial<Company>) => void
   isLoading: boolean
   approvalRules: ApprovalRule[]
@@ -80,61 +80,81 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const login = async (email: string, password: string, role: UserRole) => {
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    try {
+      console.log('Attempting login for:', email)
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password })
+      })
 
-    const mockUser: User = {
-      id: `user-${Date.now()}`,
-      email,
-      name: email.split("@")[0],
-      role,
-      companyId: "company-1",
-      companyName: "Demo Company",
-    }
-
-    setUser(mockUser)
-    localStorage.setItem("user", JSON.stringify(mockUser))
-
-    // Load or create company
-    const storedCompany = localStorage.getItem("company")
-    if (storedCompany) {
-      setCompany(JSON.parse(storedCompany))
-    }
-
-    // Add user to users list if not exists
-    const storedUsers = localStorage.getItem("users")
-    const existingUsers = storedUsers ? JSON.parse(storedUsers) : []
-    if (!existingUsers.find((u: User) => u.email === email)) {
-      const updatedUsers = [...existingUsers, mockUser]
-      setUsers(updatedUsers)
-      localStorage.setItem("users", JSON.stringify(updatedUsers))
+      if (response.ok) {
+        const data = await response.json()
+        console.log('Login successful:', data.user)
+        setUser(data.user)
+        localStorage.setItem("user", JSON.stringify(data.user))
+        localStorage.setItem("token", data.token)
+        
+        // Fetch company data
+        const companyResponse = await fetch('/api/companies', {
+          headers: {
+            'Authorization': `Bearer ${data.token}`,
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        if (companyResponse.ok) {
+          const companyData = await companyResponse.json()
+          setCompany(companyData.company)
+          localStorage.setItem("company", JSON.stringify(companyData.company))
+          console.log('Company data loaded:', companyData.company)
+        } else {
+          console.error('Failed to load company data')
+        }
+      } else {
+        const error = await response.json()
+        console.error('Login failed:', error)
+        throw new Error(error.error || 'Login failed')
+      }
+    } catch (error) {
+      console.error('Login error:', error)
+      throw error
     }
   }
 
   const logout = () => {
     setUser(null)
+    setCompany(null)
     localStorage.removeItem("user")
+    localStorage.removeItem("token")
+    localStorage.removeItem("company")
   }
 
-  const setupCompany = (companyData: Omit<Company, "id" | "createdAt">) => {
-    const newCompany: Company = {
-      ...companyData,
-      id: `company-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-    }
+  const setupCompany = async (companyData: Omit<Company, "id" | "createdAt">) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/companies', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(companyData)
+      })
 
-    setCompany(newCompany)
-    localStorage.setItem("company", JSON.stringify(newCompany))
-
-    // Update user with company info
-    if (user) {
-      const updatedUser = {
-        ...user,
-        companyId: newCompany.id,
-        companyName: newCompany.name,
+      if (response.ok) {
+        const data = await response.json()
+        setCompany(data.company)
+        localStorage.setItem("company", JSON.stringify(data.company))
+      } else {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to setup company')
       }
-      setUser(updatedUser)
-      localStorage.setItem("user", JSON.stringify(updatedUser))
+    } catch (error) {
+      console.error('Setup company error:', error)
+      throw error
     }
   }
 
